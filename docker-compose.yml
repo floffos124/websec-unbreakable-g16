@@ -23,6 +23,74 @@ services:
     networks:
       - bw-services
 
+  # ------------------------------------------------------------ identity provider (opdracht 4)
+  # Geheimen komen uit omgevingsvariabelen: GitHub Secrets in de pipeline,
+  # .local/keycloak.env bij een manuele start. ${VAR:?} laat compose meteen
+  # stoppen als er een ontbreekt.
+
+  keycloak-db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KC_DB_PASSWORD:?KC_DB_PASSWORD ontbreekt}
+    volumes:
+      - keycloak-dbdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    networks:
+      - keycloak-db-network
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.2
+    # --import-realm: importeert keycloak/unbreakable-realm.json enkel als de realm nog niet bestaat.
+    command: ["start", "--import-realm"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KC_DB_PASSWORD:?KC_DB_PASSWORD ontbreekt}
+      # Tijdelijke admin, enkel aangemaakt bij de allereerste start (lege databank).
+      KC_BOOTSTRAP_ADMIN_USERNAME: kcadmin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD:?KC_BOOTSTRAP_ADMIN_PASSWORD ontbreekt}
+      # Startwachtwoord van de testgebruikers in de realm import (tijdelijk, wijzigen bij eerste login).
+      KC_SEED_USER_PASSWORD: ${KC_SEED_USER_PASSWORD:?KC_SEED_USER_PASSWORD ontbreekt}
+      # Publieke URL: bepaalt de 'iss' claim en alle links.
+      KC_HOSTNAME: https://g16.ipv6.thelastgym.be/auth
+      KC_HTTP_RELATIVE_PATH: /auth
+      # TLS eindigt in BunkerWeb; achter de WAF praat Keycloak HTTP.
+      KC_HTTP_ENABLED: "true"
+      # X-Forwarded-* enkel vertrouwen van BunkerWeb (netwerk bw-services).
+      KC_PROXY_HEADERS: xforwarded
+      KC_PROXY_TRUSTED_ADDRESSES: 10.20.31.0/24
+      KC_HEALTH_ENABLED: "true"
+      # Health endpoints op de management poort 9000, op /health (niet onder /auth).
+      KC_HTTP_MANAGEMENT_RELATIVE_PATH: /
+      JAVA_OPTS_KC_HEAP: "-Xms128m -Xmx512m"
+    volumes:
+      - ./keycloak/unbreakable-realm.json:/opt/keycloak/data/import/unbreakable-realm.json:ro
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    healthcheck:
+      # Het image heeft geen curl: bash /dev/tcp naar de management poort.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      # NIET op bw-universe: dat is het controlenetwerk van BunkerWeb (API_WHITELIST_IP).
+      - bw-services
+      - keycloak-db-network
+
+  # ------------------------------------------------------------ WAF
+
   bunkerweb:
     image: bunkerity/bunkerweb:1.5.11
     restart: unless-stopped
@@ -44,6 +112,22 @@ services:
       - g16.ipv6.thelastgym.be_REVERSE_PROXY_HOST_2=http://bw-ui:7000
       - g16.ipv6.thelastgym.be_INTERCEPTED_ERROR_CODES=400 404 405 413 429 500 501 502 503 504
       - g16.ipv6.thelastgym.be_MAX_CLIENT_SIZE=50m
+      # Keycloak op /auth (zelfde domein als de app). De admin console is bewust
+      # publiek bereikbaar voor gemak; zie docs/keycloak.md.
+      - g16.ipv6.thelastgym.be_REVERSE_PROXY_URL_3=/auth/
+      - g16.ipv6.thelastgym.be_REVERSE_PROXY_HOST_3=http://keycloak:8080
+      - g16.ipv6.thelastgym.be_REVERSE_PROXY_HEADERS_3=X-Forwarded-Port 443
+      - g16.ipv6.thelastgym.be_LIMIT_REQ_URL_2=^/auth/
+      - g16.ipv6.thelastgym.be_LIMIT_REQ_RATE_2=20r/s
+      - g16.ipv6.thelastgym.be_COOKIE_FLAGS=KEYCLOAK_SESSION SameSite=Lax
+      - g16.ipv6.thelastgym.be_ALLOWED_METHODS=GET|POST|HEAD|PUT|DELETE|OPTIONS
+      # ModSecurity uitzonderingen voor de Keycloak admin console (false positives).
+      - |
+        g16.ipv6.thelastgym.be_CUSTOM_CONF_MODSEC_keycloak_exceptions=SecRule REQUEST_URI "@rx ^/auth/admin/serverinfo(?:\?.*)?$" "id:1004101,phase:1,pass,nolog,ctl:ruleRemoveById=951240"
+        SecRule REQUEST_URI "@rx ^/auth/admin/realms/[^/]+/users/[^/]+/credentials/[^/]+/userLabel(?:\?.*)?$" "id:1004102,phase:1,pass,nolog,ctl:ruleRemoveById=920420"
+        SecRule REQUEST_URI "@rx ^/auth/admin/realms/[^/]+/users/[^/]+/role-mappings/realm(?:\?.*)?$" "id:1004103,phase:1,pass,nolog,ctl:ruleRemoveById=932130"
+        SecRule REQUEST_URI "@rx ^/auth/admin/realms/[^/]+/ui-ext(?:\?.*)?$" "id:1004104,phase:1,pass,nolog,ctl:ruleRemoveTargetById=932130;ARGS:json.defaultRole.description"
+        SecRule REQUEST_URI "@rx ^/auth/realms/[^/]+/account/?(?:\?.*)?$" "id:1004105,phase:1,pass,nolog,ctl:ruleRemoveById=932130"
     networks:
       - bw-universe
       - bw-services
@@ -89,6 +173,7 @@ services:
 volumes:
   dbdata:
   bw-data:
+  keycloak-dbdata:
 
 networks:
   bw-universe:
@@ -99,5 +184,13 @@ networks:
         - subnet: 10.20.30.0/24
   bw-services:
     name: bw-services
+    # Vast subnet, zodat KC_PROXY_TRUSTED_ADDRESSES klopt na elke herstart.
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.20.31.0/24
   bw-docker:
     name: bw-docker
+  # Intern: enkel Keycloak en zijn databank, geen verkeer naar buiten.
+  keycloak-db-network:
+    internal: true
