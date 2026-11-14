@@ -1,0 +1,157 @@
+{
+  "realm": "unbreakable",
+  "displayName": "Unbreakable",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "editUsernameAllowed": false,
+  "loginWithEmailAllowed": false,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "verifyEmail": false,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "failureFactor": 5,
+  "waitIncrementSeconds": 60,
+  "maxFailureWaitSeconds": 900,
+  "maxDeltaTimeSeconds": 43200,
+  "minimumQuickLoginWaitSeconds": 60,
+  "quickLoginCheckMilliSeconds": 1000,
+  "passwordPolicy": "length(12) and notUsername and notEmail and passwordHistory(3)",
+  "otpPolicyType": "totp",
+  "otpPolicyAlgorithm": "HmacSHA1",
+  "otpPolicyDigits": 6,
+  "otpPolicyPeriod": 30,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "revokeRefreshToken": true,
+  "refreshTokenMaxReuse": 0,
+  "eventsEnabled": true,
+  "eventsExpiration": 2592000,
+  "adminEventsEnabled": true,
+  "adminEventsDetailsEnabled": false,
+  "clients": [
+    {
+      "clientId": "unbreakable-spa",
+      "name": "Unbreakable SPA",
+      "description": "Publieke client: authorization code flow met PKCE (S256), geen secret",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "consentRequired": false,
+      "fullScopeAllowed": false,
+      "frontchannelLogout": true,
+      "rootUrl": "https://g16.ipv6.thelastgym.be",
+      "baseUrl": "/",
+      "redirectUris": [
+        "https://g16.ipv6.thelastgym.be/"
+      ],
+      "webOrigins": [
+        "https://g16.ipv6.thelastgym.be"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "https://g16.ipv6.thelastgym.be/",
+        "oauth2.device.authorization.grant.enabled": "false",
+        "oidc.ciba.grant.enabled": "false",
+        "use.refresh.tokens": "true"
+      },
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "basic",
+        "profile",
+        "roles"
+      ],
+      "optionalClientScopes": [],
+      "protocolMappers": [
+        {
+          "name": "audience unbreakable-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "unbreakable-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "id": "0b8a6a3e-5f2c-4c1e-9a51-3d6f1e2a7c01",
+      "username": "anna",
+      "enabled": true,
+      "firstName": "Anna",
+      "lastName": "Test",
+      "email": "anna@unbreakable.test",
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${KC_SEED_USER_PASSWORD}",
+          "temporary": true
+        }
+      ],
+      "requiredActions": [
+        "CONFIGURE_TOTP"
+      ],
+      "realmRoles": [
+        "default-roles-unbreakable"
+      ]
+    },
+    {
+      "id": "1c9b7b4f-6a3d-4d2f-8b62-4e7a2f3b8d02",
+      "username": "bram",
+      "enabled": true,
+      "firstName": "Bram",
+      "lastName": "Test",
+      "email": "bram@unbreakable.test",
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${KC_SEED_USER_PASSWORD}",
+          "temporary": true
+        }
+      ],
+      "requiredActions": [
+        "CONFIGURE_TOTP"
+      ],
+      "realmRoles": [
+        "default-roles-unbreakable"
+      ]
+    },
+    {
+      "id": "2dac8c5a-7b4e-4e3a-9c73-5f8b3a4c9e03",
+      "username": "chris",
+      "enabled": true,
+      "firstName": "Chris",
+      "lastName": "Test",
+      "email": "chris@unbreakable.test",
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${KC_SEED_USER_PASSWORD}",
+          "temporary": true
+        }
+      ],
+      "requiredActions": [
+        "CONFIGURE_TOTP"
+      ],
+      "realmRoles": [
+        "default-roles-unbreakable"
+      ]
+    }
+  ]
+}

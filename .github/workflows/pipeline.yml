@@ -111,6 +111,12 @@ jobs:
           docker network prune -f
 
       - name: Deploy application and WAF with Docker Compose
+        # Geheimen voor Keycloak komen uit GitHub Secrets, nooit uit de repo.
+        # docker-compose.yml stopt meteen (${VAR:?}) als er een ontbreekt.
+        env:
+          KC_DB_PASSWORD: ${{ secrets.KC_DB_PASSWORD }}
+          KC_BOOTSTRAP_ADMIN_PASSWORD: ${{ secrets.KC_BOOTSTRAP_ADMIN_PASSWORD }}
+          KC_SEED_USER_PASSWORD: ${{ secrets.KC_SEED_USER_PASSWORD }}
         run: |
           echo "=== Alle beveiligingsscans geslaagd, start volledige stack deployment (inclusief BunkerWeb) ==="
           docker compose up -d --build --remove-orphans
