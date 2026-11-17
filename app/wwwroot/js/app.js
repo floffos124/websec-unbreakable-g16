@@ -1,9 +1,15 @@
 // De schermen van Unbreakable. Navigeren gebeurt met het deel na # in de URL.
 
-import { api, currentUser, setUser } from './api.js';
+import { api } from './api.js';
+import { init, logout, currentUsername } from './auth.js';
 import { encrypt, decrypt, prepareText, computeHmac, verifyHmac } from './crypto.js';
 
 const app = document.getElementById('app');
+let me = null; // { username, sub } zoals de API ons kent (uit het token)
+
+function currentUser() {
+    return me?.username || currentUsername();
+}
 
 function escapeHtml(text) {
     return String(text)
@@ -22,41 +28,23 @@ function formatDate(value) {
 
 function showWho() {
     const user = currentUser();
-    document.getElementById('who').innerHTML = user
-        ? `Je bent <strong>${escapeHtml(user)}</strong> (<a href="#/">wisselen</a>)`
-        : '';
-}
+    const who = document.getElementById('who');
+    who.textContent = '';
+    if (!user) return;
 
-// ------------------------------------------------------------------ naam kiezen
+    const label = document.createElement('span');
+    label.className = 'mr-2';
+    label.append('Aangemeld als ');
+    const strong = document.createElement('strong');
+    strong.textContent = user;
+    label.append(strong);
 
-function renderLogin() {
-    const user = currentUser();
-    app.innerHTML = `
-        <div class="text-center mb-5">
-            <h1 class="display-4">Unbreakable</h1>
-            <p class="lead">Berichten die niemand anders kan lezen. Dat is toch de bedoeling.</p>
-        </div>
-        <div class="row justify-content-center">
-            <div class="col-md-5">
-                ${user ? `<p>Je gebruikt Unbreakable als <strong>${escapeHtml(user)}</strong>.
-                          <a href="#/inbox">Naar je inbox</a></p>
-                          <p>Iemand anders? Vul hieronder een andere naam in.</p>` : ''}
-                <form id="login">
-                    <div class="form-group">
-                        <label for="name">Wie ben je?</label>
-                        <input id="name" class="form-control" placeholder="bijvoorbeeld Anna"
-                               required minlength="2" maxlength="40" />
-                    </div>
-                    <button type="submit" class="btn btn-primary">Verder</button>
-                </form>
-            </div>
-        </div>`;
+    const button = document.createElement('button');
+    button.className = 'btn btn-sm btn-outline-light';
+    button.textContent = 'Afmelden';
+    button.addEventListener('click', () => logout());
 
-    document.getElementById('login').addEventListener('submit', (event) => {
-        event.preventDefault();
-        setUser(document.getElementById('name').value.trim());
-        location.hash = '#/inbox';
-    });
+    who.append(label, button);
 }
 
 // ------------------------------------------------------------------ inbox
@@ -261,7 +249,7 @@ async function renderNew() {
         const hmac = await computeHmac(ciphertext, hmacKey);
 
         await api.send({
-            recipient: document.getElementById('recipient').value.trim(),
+            recipient: document.getElementById('recipient').value.trim().toLowerCase(),
             subject: document.getElementById('subject').value,
             body: ciphertext,
             keyLine: parseInt(keyLine, 10),
@@ -287,7 +275,25 @@ function renderAbout() {
 
 // ------------------------------------------------------------------ navigatie
 
+let started = null;
+
+// Eén keer bij het laden: aanmelden (of de callback van Keycloak verwerken)
+// en de API vragen wie we zijn.
+async function start() {
+    await init();
+    me = await api.me();
+}
+
 async function route() {
+    try {
+        if (!started) started = start();
+        await started;
+    } catch (error) {
+        started = null;
+        app.innerHTML = `<div class="alert alert-danger">Er liep iets mis: ${escapeHtml(error.message)}</div>`;
+        return;
+    }
+
     showWho();
 
     const [path, query] = (location.hash || '#/').slice(1).split('?');
@@ -295,14 +301,11 @@ async function route() {
 
     try {
         if (path === '/' || path === '') {
-            return renderLogin();
+            location.hash = '#/inbox';
+            return;
         }
         if (path === '/over') {
             return renderAbout();
-        }
-        if (!currentUser()) {
-            location.hash = '#/';
-            return;
         }
         if (path === '/inbox') {
             return await renderInbox(params);
