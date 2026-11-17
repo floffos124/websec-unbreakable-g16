@@ -1,0 +1,20 @@
+# Autorisatiemodel van Unbreakable (OpenFGA, ReBAC).
+# Dit bestand is de bron van de regels. model.json is dezelfde inhoud in het
+# JSON formaat dat de API van OpenFGA verwacht; houd beide gelijk
+# (fga model transform --file model.fga > model.json).
+
+model
+  schema 1.1
+
+type user
+
+type message
+  relations
+    # Feiten: wie verstuurde en wie ontving het bericht (tuples, geschreven door de API).
+    define sender: [user]
+    define recipient: [user]
+
+    # Regels van de klant:
+    # enkel de ontvanger mag lezen, enkel de afzender mag verwijderen.
+    define can_read: recipient
+    define can_delete: sender

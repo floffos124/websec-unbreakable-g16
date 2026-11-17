@@ -89,6 +89,70 @@ services:
       - bw-services
       - keycloak-db-network
 
+  # ------------------------------------------------------------ PDP (opdracht 4, stap 3)
+  # OpenFGA beslist wie wat mag met een bericht. Het model (de regels) staat in
+  # openfga/model.fga; de feiten (wie afzender en ontvanger is) zijn tuples in de
+  # databank van OpenFGA. Niets hiervan is van buitenaf bereikbaar.
+
+  openfga-db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: openfga
+      POSTGRES_USER: openfga
+      POSTGRES_PASSWORD: ${OPENFGA_DB_PASSWORD:?OPENFGA_DB_PASSWORD ontbreekt}
+    volumes:
+      - openfga-dbdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openfga -d openfga"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    networks:
+      - openfga-db-network
+
+  # Eenmalig bij elke start: databankschema van OpenFGA aanmaken of bijwerken, daarna stopt hij.
+  openfga-migrate:
+    image: openfga/openfga:v1.22.1
+    command: ["migrate"]
+    environment:
+      OPENFGA_DATASTORE_ENGINE: postgres
+      OPENFGA_DATASTORE_URI: postgres://openfga:${OPENFGA_DB_PASSWORD:?OPENFGA_DB_PASSWORD ontbreekt}@openfga-db:5432/openfga?sslmode=disable
+    depends_on:
+      openfga-db:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - openfga-db-network
+
+  openfga:
+    image: openfga/openfga:v1.22.1
+    command: ["run"]
+    # Geen 'ports': de HTTP API (8080) is enkel bereikbaar op het interne netwerk authz.
+    expose:
+      - "8080"
+    environment:
+      OPENFGA_DATASTORE_ENGINE: postgres
+      OPENFGA_DATASTORE_URI: postgres://openfga:${OPENFGA_DB_PASSWORD:?OPENFGA_DB_PASSWORD ontbreekt}@openfga-db:5432/openfga?sslmode=disable
+      # Enkel wie de preshared key kent (later de API) mag vragen stellen of tuples schrijven.
+      OPENFGA_AUTHN_METHOD: preshared
+      OPENFGA_AUTHN_PRESHARED_KEYS: ${OPENFGA_PRESHARED_KEY:?OPENFGA_PRESHARED_KEY ontbreekt}
+      # Geen playground (web UI) in productie.
+      OPENFGA_PLAYGROUND_ENABLED: "false"
+      OPENFGA_LOG_FORMAT: json
+    depends_on:
+      openfga-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/grpc_health_probe", "-addr=127.0.0.1:8081"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - authz
+      - openfga-db-network
+
   # ------------------------------------------------------------ WAF
 
   bunkerweb:
@@ -174,6 +238,7 @@ volumes:
   dbdata:
   bw-data:
   keycloak-dbdata:
+  openfga-dbdata:
 
 networks:
   bw-universe:
@@ -193,4 +258,10 @@ networks:
     name: bw-docker
   # Intern: enkel Keycloak en zijn databank, geen verkeer naar buiten.
   keycloak-db-network:
+    internal: true
+  # Intern: enkel OpenFGA en wie hem mag bevragen (de API vanaf stap 4).
+  authz:
+    internal: true
+  # Intern: enkel OpenFGA en zijn databank.
+  openfga-db-network:
     internal: true

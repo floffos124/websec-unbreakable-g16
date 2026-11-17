@@ -1,0 +1,44 @@
+# Testen van het model zonder de app: fga model test --tests model.fga.yaml
+# (OpenFGA CLI, https://github.com/openfga/cli)
+name: Unbreakable autorisatie
+model_file: ./model.fga
+
+tuples:
+  - user: user:anna
+    relation: recipient
+    object: message:1
+  - user: user:bram
+    relation: sender
+    object: message:1
+
+tests:
+  - name: enkel de ontvanger leest, enkel de afzender verwijdert
+    check:
+      - user: user:anna
+        object: message:1
+        assertions:
+          can_read: true
+          can_delete: false
+      - user: user:bram
+        object: message:1
+        assertions:
+          can_read: false
+          can_delete: true
+      - user: user:chris
+        object: message:1
+        assertions:
+          can_read: false
+          can_delete: false
+    list_objects:
+      - user: user:anna
+        type: message
+        assertions:
+          can_read:
+            - message:1
+          can_delete: []
+      - user: user:bram
+        type: message
+        assertions:
+          can_read: []
+          can_delete:
+            - message:1
