@@ -9,11 +9,13 @@ public class Message
     [Required]
     [StringLength(40, MinimumLength = 2)]
     [Display(Name = "Van")]
+    // Weergavenaam van de afzender (preferred_username uit het token).
     public string Sender { get; set; }
 
     [Required]
     [StringLength(40, MinimumLength = 2)]
     [Display(Name = "Aan")]
+    // Weergavenaam van de ontvanger.
     public string Recipient { get; set; }
 
     [Required]
@@ -35,5 +37,13 @@ public class Message
     [StringLength(64)]
     [Display(Name = "HMAC")]
     public string? Hmac { get; set; }
-}
 
+    // Identiteit van de afzender: de 'sub' claim uit het Keycloak token.
+    // Hierop autoriseren we, niet op de naam.
+    [StringLength(128)]
+    public string SenderId { get; set; }
+
+    // Identiteit van de ontvanger ('sub' van de ontvanger).
+    [StringLength(128)]
+    public string RecipientId { get; set; }
+}

@@ -1,5 +1,7 @@
+using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json;
+using Unbreakable.Auth;
 using Unbreakable.Data;
 using Unbreakable.Models;
 
@@ -11,9 +13,14 @@ builder.Services.AddDbContext<UnbreakableContext>(options =>
 builder.Services.AddCors(options =>
     options.AddDefaultPolicy(policy => policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
 
+// Authenticatie: Keycloak access tokens (OIDC, JWT). Zie Auth/KeycloakAuth.cs.
+builder.Services.AddKeycloakJwt(builder.Configuration);
+builder.Services.AddMemoryCache();
+builder.Services.AddScoped<UserDirectory>();
+
 var app = builder.Build();
 
-// Databank aanmaken en vullen met voorbeeldberichten.
+// Databank aanmaken, schema bijwerken en vullen met voorbeeldberichten.
 // De databank kan iets later opstarten dan de app, dus we proberen een paar keer.
 using (var scope = app.Services.CreateScope())
 {
@@ -25,12 +32,15 @@ using (var scope = app.Services.CreateScope())
         try
         {
             context.Database.EnsureCreated();
+            SchemaUpgrade.Apply(context);
             SeedData.Initialize(context);
+            SchemaUpgrade.LinkLegacyMessages(context);
             break;
         }
         catch (Exception ex) when (attempt < 30)
         {
             logger.LogWarning("Databank nog niet bereikbaar ({Error}), poging {Attempt}", ex.Message, attempt);
+            context.ChangeTracker.Clear();
             Thread.Sleep(2000);
         }
     }
@@ -43,27 +53,44 @@ app.UseCors();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
-app.MapGet("/health", () => "ok");
+app.UseAuthentication();
+app.UseAuthorization();
 
-// De API. Wie je bent, staat voorlopig in de header X-User.
-var api = app.MapGroup("/api");
-
-api.MapGet("/users", async (UnbreakableContext db) =>
+// Elke gebruiker met een geldig token komt in het gebruikersregister (sub en naam),
+// zodat je hem een bericht kan sturen.
+app.Use(async (context, next) =>
 {
-    var senders = await db.Messages.Select(m => m.Sender).Distinct().ToListAsync();
-    var recipients = await db.Messages.Select(m => m.Recipient).Distinct().ToListAsync();
-    return Results.Ok(senders.Union(recipients).OrderBy(name => name).ToList());
-});
-
-api.MapGet("/messages", async (HttpRequest request, UnbreakableContext db) =>
-{
-    var user = CurrentUser(request);
-    if (string.IsNullOrEmpty(user))
+    if (context.User.Identity?.IsAuthenticated == true)
     {
-        return Results.Unauthorized();
+        var directory = context.RequestServices.GetRequiredService<UserDirectory>();
+        await directory.TouchAsync(context.User.ToCurrentUser(), context.RequestAborted);
     }
 
-    var inbox = db.Messages.Where(m => m.Recipient == user);
+    await next(context);
+});
+
+app.MapGet("/health", () => "ok");
+
+// De API. Wie je bent, komt uit het access token (Authorization: Bearer ...).
+// Zonder geldig token: 401. De header X-User bestaat niet meer.
+var api = app.MapGroup("/api").RequireAuthorization();
+
+api.MapGet("/me", (ClaimsPrincipal principal) =>
+{
+    var user = principal.ToCurrentUser();
+    return Results.Ok(new { username = user.Username, sub = user.Sub });
+});
+
+// Gebruikersregister voor het veld "Aan". Enkel namen.
+api.MapGet("/users", async (UnbreakableContext db) =>
+    Results.Ok(await db.Users.AsNoTracking().OrderBy(u => u.Username).Select(u => u.Username).ToListAsync()));
+
+api.MapGet("/messages", async (HttpRequest request, ClaimsPrincipal principal, UnbreakableContext db) =>
+{
+    // We vergelijken op sub (vaste id), niet op de naam.
+    var user = principal.ToCurrentUser().Sub;
+
+    var inbox = db.Messages.Where(m => m.RecipientId == user);
 
     var from = request.Query["from"].ToString();
     if (!string.IsNullOrEmpty(from))
@@ -74,32 +101,24 @@ api.MapGet("/messages", async (HttpRequest request, UnbreakableContext db) =>
     return Results.Ok(await inbox.OrderByDescending(m => m.SentAt).ToListAsync());
 });
 
-api.MapGet("/messages/search", async (HttpRequest request, UnbreakableContext db) =>
+api.MapGet("/messages/search", async (HttpRequest request, ClaimsPrincipal principal, UnbreakableContext db) =>
 {
-    var user = CurrentUser(request);
-    if (string.IsNullOrEmpty(user))
-    {
-        return Results.Unauthorized();
-    }
+    var user = principal.ToCurrentUser().Sub;
 
     var q = request.Query["q"].ToString();
-    var sql = "SELECT * FROM \"Messages\" WHERE \"Recipient\" = '" + user + "' " +
+    var sql = "SELECT * FROM \"Messages\" WHERE \"RecipientId\" = '" + user + "' " +
               "AND (\"Subject\" ILIKE '%" + q + "%' OR \"Body\" ILIKE '%" + q + "%')";
 
     var messages = await db.Messages.FromSqlRaw(sql).OrderByDescending(m => m.SentAt).ToListAsync();
     return Results.Ok(messages);
 });
 
-api.MapGet("/messages/export", async (HttpRequest request, UnbreakableContext db) =>
+api.MapGet("/messages/export", async (ClaimsPrincipal principal, UnbreakableContext db) =>
 {
-    var user = CurrentUser(request);
-    if (string.IsNullOrEmpty(user))
-    {
-        return Results.Unauthorized();
-    }
+    var user = principal.ToCurrentUser().Sub;
 
     var messages = await db.Messages
-        .Where(m => m.Recipient == user)
+        .Where(m => m.RecipientId == user)
         .OrderBy(m => m.SentAt)
         .ToListAsync();
 
@@ -112,13 +131,22 @@ api.MapGet("/messages/{id:int}", async (int id, UnbreakableContext db) =>
     return message == null ? Results.NotFound() : Results.Ok(message);
 });
 
-api.MapPost("/messages", async (Message message, HttpRequest request, UnbreakableContext db) =>
+api.MapPost("/messages", async (Message message, ClaimsPrincipal principal, UserDirectory directory, UnbreakableContext db) =>
 {
-    // Geen afzender meegegeven? Dan nemen we wie je bent.
-    if (string.IsNullOrEmpty(message.Sender))
+    // De afzender komt altijd uit het token, nooit uit de request body.
+    var user = principal.ToCurrentUser();
+    message.Sender = user.Username;
+    message.SenderId = user.Sub;
+
+    // De ontvanger kies je op naam; we bewaren ook zijn sub.
+    var recipient = await directory.FindByUsernameAsync(message.Recipient, CancellationToken.None);
+    if (recipient == null)
     {
-        message.Sender = CurrentUser(request);
+        return Results.Problem(title: "Onbekende ontvanger",
+            detail: "Deze gebruiker heeft nog nooit aangemeld.", statusCode: StatusCodes.Status422UnprocessableEntity);
     }
+    message.Recipient = recipient.Username;
+    message.RecipientId = recipient.Sub;
 
     message.Id = 0;
     message.SentAt = DateTime.UtcNow;
@@ -143,8 +171,3 @@ api.MapDelete("/messages/{id:int}", async (int id, UnbreakableContext db) =>
 });
 
 app.Run();
-
-static string CurrentUser(HttpRequest request)
-{
-    return request.Headers["X-User"].ToString();
-}
