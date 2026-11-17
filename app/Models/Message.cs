@@ -46,4 +46,9 @@ public class Message
     // Identiteit van de ontvanger ('sub' van de ontvanger).
     [StringLength(128)]
     public string RecipientId { get; set; }
+
+    // True zodra de tuples (sender, recipient) in OpenFGA staan.
+    // Zolang dit false is, geeft de PDP geen toegang (fail closed) en
+    // probeert TupleSyncService het opnieuw.
+    public bool FgaSynced { get; set; }
 }

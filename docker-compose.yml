@@ -5,11 +5,19 @@ services:
       - "8080"
     environment:
       ConnectionStrings__Unbreakable: "Host=db;Port=5432;Database=unbreakable;Username=unbreakable;Password=Unbr3akable!2026"
+      # Preshared key om OpenFGA te bevragen (zelfde geheim als in de service openfga).
+      OpenFga__ApiToken: ${OPENFGA_PRESHARED_KEY:?OPENFGA_PRESHARED_KEY ontbreekt}
+    volumes:
+      # Het autorisatiemodel staat buiten de API-code en is read-only.
+      - ./openfga/model.json:/config/openfga/model.json:ro
     depends_on:
       - db
+      - openfga
     restart: unless-stopped
     networks:
       - bw-services
+      # Naar OpenFGA (PDP), intern netwerk.
+      - authz
 
   db:
     image: postgres:17

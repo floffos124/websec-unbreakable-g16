@@ -13,6 +13,8 @@ public static class SchemaUpgrade
         ALTER TABLE "Messages" ADD COLUMN IF NOT EXISTS "Hmac" character varying(64);
         ALTER TABLE "Messages" ADD COLUMN IF NOT EXISTS "SenderId" character varying(128);
         ALTER TABLE "Messages" ADD COLUMN IF NOT EXISTS "RecipientId" character varying(128);
+        ALTER TABLE "Messages" ADD COLUMN IF NOT EXISTS "FgaSynced" boolean NOT NULL DEFAULT FALSE;
+        CREATE INDEX IF NOT EXISTS "IX_Messages_FgaSynced" ON "Messages" ("FgaSynced");
 
         CREATE TABLE IF NOT EXISTS "Users" (
             "Sub" character varying(128) NOT NULL,
@@ -21,6 +23,14 @@ public static class SchemaUpgrade
             CONSTRAINT "PK_Users" PRIMARY KEY ("Sub")
         );
         CREATE UNIQUE INDEX IF NOT EXISTS "IX_Users_Username" ON "Users" ("Username");
+
+        CREATE TABLE IF NOT EXISTS "FgaState" (
+            "Id" integer NOT NULL,
+            "StoreId" character varying(64) NOT NULL,
+            "ModelId" character varying(64) NOT NULL,
+            "ModelHash" character varying(64) NOT NULL,
+            CONSTRAINT "PK_FgaState" PRIMARY KEY ("Id")
+        );
         """;
 
     // Berichten van voor opdracht 4 hebben enkel een naam (uit X-User), geen sub.

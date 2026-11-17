@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json;
 using Unbreakable.Auth;
+using Unbreakable.Authorization;
 using Unbreakable.Data;
 using Unbreakable.Models;
 
@@ -17,6 +18,25 @@ builder.Services.AddCors(options =>
 builder.Services.AddKeycloakJwt(builder.Configuration);
 builder.Services.AddMemoryCache();
 builder.Services.AddScoped<UserDirectory>();
+
+// Autorisatie: OpenFGA als PDP. De API (PEP) vraagt per bericht of het mag.
+var fgaOptions = builder.Configuration.GetSection("OpenFga").Get<OpenFgaOptions>() ?? new OpenFgaOptions();
+builder.Services.AddSingleton(fgaOptions);
+builder.Services.AddHttpClient(OpenFgaClient.HttpClientName, client =>
+{
+    client.BaseAddress = new Uri(fgaOptions.ApiUrl.TrimEnd('/') + "/");
+    client.Timeout = TimeSpan.FromSeconds(Math.Clamp(fgaOptions.TimeoutSeconds, 1, 30));
+});
+builder.Services.AddSingleton<FgaStoreState>();
+builder.Services.AddSingleton<OpenFgaClient>();
+builder.Services.AddSingleton<FgaBootstrapper>();
+builder.Services.AddScoped<MessageAuthorization>();
+// Maakt bij het opstarten de store en het model aan en schrijft ontbrekende tuples weg.
+builder.Services.AddHostedService<TupleSyncService>();
+
+// Kan de PDP niet beslissen, dan 503 en nooit toegang (fail closed).
+builder.Services.AddExceptionHandler<FgaExceptionHandler>();
+builder.Services.AddProblemDetails();
 
 var app = builder.Build();
 
@@ -46,7 +66,8 @@ using (var scope = app.Services.CreateScope())
     }
 }
 
-app.UseDeveloperExceptionPage();
+// Geen stacktraces naar de gebruiker; fouten van de PDP worden 503 (FgaExceptionHandler).
+app.UseExceptionHandler();
 app.UseCors();
 
 // De SPA: index.html, JavaScript en CSS uit wwwroot.
@@ -125,13 +146,22 @@ api.MapGet("/messages/export", async (ClaimsPrincipal principal, UnbreakableCont
     return Results.Text(JsonConvert.SerializeObject(messages, Formatting.Indented), "application/json");
 });
 
-api.MapGet("/messages/{id:int}", async (int id, UnbreakableContext db) =>
+// Eén bericht: eerst de PDP, dan pas de databank. Bestaat een id niet, dan zijn
+// er ook geen tuples en weigert de PDP: zo lekt de API niet welke id's bestaan.
+api.MapGet("/messages/{id:int}", async (int id, ClaimsPrincipal principal, MessageAuthorization authz,
+    UnbreakableContext db, CancellationToken ct) =>
 {
+    if (!await authz.CanReadAsync(principal.ToCurrentUser(), id, ct))
+    {
+        return Forbidden("Enkel de ontvanger mag dit bericht lezen.");
+    }
+
     var message = await db.Messages.FindAsync(id);
     return message == null ? Results.NotFound() : Results.Ok(message);
 });
 
-api.MapPost("/messages", async (Message message, ClaimsPrincipal principal, UserDirectory directory, UnbreakableContext db) =>
+api.MapPost("/messages", async (Message message, ClaimsPrincipal principal, UserDirectory directory,
+    MessageAuthorization authz, UnbreakableContext db, ILogger<Program> logger, CancellationToken ct) =>
 {
     // De afzender komt altijd uit het token, nooit uit de request body.
     var user = principal.ToCurrentUser();
@@ -150,15 +180,37 @@ api.MapPost("/messages", async (Message message, ClaimsPrincipal principal, User
 
     message.Id = 0;
     message.SentAt = DateTime.UtcNow;
+    message.FgaSynced = false;
 
     db.Messages.Add(message);
     await db.SaveChangesAsync();
 
+    // Feiten naar de PDP: wie afzender en wie ontvanger is. Lukt het niet, dan
+    // blijft het bericht bewaard en probeert TupleSyncService het opnieuw; tot
+    // dan kan niemand het lezen of verwijderen (fail closed).
+    try
+    {
+        await authz.EnsureMessageTuplesAsync(message, ct);
+        message.FgaSynced = true;
+        await db.SaveChangesAsync();
+    }
+    catch (Exception ex) when (ex is FgaUnavailableException or FgaRequestException)
+    {
+        logger.LogWarning("Tuples voor bericht {Id} nog niet geschreven: {Error}. Wordt opnieuw geprobeerd.",
+            message.Id, ex.Message);
+    }
+
     return Results.Created($"/api/messages/{message.Id}", message);
 });
 
-api.MapDelete("/messages/{id:int}", async (int id, UnbreakableContext db) =>
+api.MapDelete("/messages/{id:int}", async (int id, ClaimsPrincipal principal, MessageAuthorization authz,
+    UnbreakableContext db, ILogger<Program> logger, CancellationToken ct) =>
 {
+    if (!await authz.CanDeleteAsync(principal.ToCurrentUser(), id, ct))
+    {
+        return Forbidden("Enkel de afzender mag dit bericht verwijderen.");
+    }
+
     var message = await db.Messages.FindAsync(id);
     if (message == null)
     {
@@ -167,7 +219,22 @@ api.MapDelete("/messages/{id:int}", async (int id, UnbreakableContext db) =>
 
     db.Messages.Remove(message);
     await db.SaveChangesAsync();
+
+    // Tuples opruimen. Mislukt dit, dan blijven tuples naar een id dat niet meer
+    // bestaat; id's worden niet hergebruikt binnen dezelfde store.
+    try
+    {
+        await authz.RemoveMessageTuplesAsync(id, ct);
+    }
+    catch (Exception ex) when (ex is FgaUnavailableException or FgaRequestException)
+    {
+        logger.LogWarning("Tuples van verwijderd bericht {Id} niet opgeruimd: {Error}", id, ex.Message);
+    }
+
     return Results.NoContent();
 });
 
 app.Run();
+
+static IResult Forbidden(string detail) =>
+    Results.Problem(title: "Geen toegang", detail: detail, statusCode: StatusCodes.Status403Forbidden);

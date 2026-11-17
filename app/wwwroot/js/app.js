@@ -186,8 +186,16 @@ async function renderMessage(id) {
 
     document.getElementById('delete').addEventListener('click', async () => {
         if (confirm('Ben je zeker dat je dit bericht wil verwijderen?')) {
-            await api.remove(id);
-            location.hash = '#/inbox';
+            try {
+                await api.remove(id);
+                location.hash = '#/inbox';
+            } catch (error) {
+                // Bv. 403: enkel de afzender mag verwijderen. De PDP beslist, niet de SPA.
+                const alert = document.createElement('div');
+                alert.className = 'alert alert-danger';
+                alert.textContent = error.message;
+                app.prepend(alert);
+            }
         }
     });
 }

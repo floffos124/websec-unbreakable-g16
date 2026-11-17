@@ -59,6 +59,8 @@ public static class SeedData
         RecipientId = recipientId,
         Subject = subject,
         Body = body,
-        SentAt = sentAt
+        SentAt = sentAt,
+        // TupleSyncService schrijft de tuples weg zodra OpenFGA klaar is.
+        FgaSynced = false
     };
 }
