@@ -106,42 +106,48 @@ api.MapGet("/me", (ClaimsPrincipal principal) =>
 api.MapGet("/users", async (UnbreakableContext db) =>
     Results.Ok(await db.Users.AsNoTracking().OrderBy(u => u.Username).Select(u => u.Username).ToListAsync()));
 
-api.MapGet("/messages", async (HttpRequest request, ClaimsPrincipal principal, UnbreakableContext db) =>
+// Lijsten krijgen hun toegestane objecten van dezelfde PDP als individuele berichten.
+api.MapGet("/messages", async (HttpRequest request, ClaimsPrincipal principal,
+    MessageAuthorization authz, UnbreakableContext db, CancellationToken ct) =>
 {
-    // We vergelijken op sub (vaste id), niet op de naam.
-    var user = principal.ToCurrentUser().Sub;
+    var ids = await authz.ReadableMessageIdsAsync(principal.ToCurrentUser(), ct);
+    var inbox = db.Messages.AsNoTracking().Where(m => ids.Contains(m.Id));
 
-    var inbox = db.Messages.Where(m => m.RecipientId == user);
-
+    // Functionele filter, uitsluitend binnen de door OpenFGA toegestane berichten.
     var from = request.Query["from"].ToString();
     if (!string.IsNullOrEmpty(from))
     {
         inbox = inbox.Where(m => m.Sender == from);
     }
 
-    return Results.Ok(await inbox.OrderByDescending(m => m.SentAt).ToListAsync());
+    return Results.Ok(await inbox.OrderByDescending(m => m.SentAt).ToListAsync(ct));
 });
 
-api.MapGet("/messages/search", async (HttpRequest request, ClaimsPrincipal principal, UnbreakableContext db) =>
+api.MapGet("/messages/search", async (HttpRequest request, ClaimsPrincipal principal,
+    MessageAuthorization authz, UnbreakableContext db, CancellationToken ct) =>
 {
-    var user = principal.ToCurrentUser().Sub;
-
+    var ids = await authz.ReadableMessageIdsAsync(principal.ToCurrentUser(), ct);
     var q = request.Query["q"].ToString();
-    var sql = "SELECT * FROM \"Messages\" WHERE \"RecipientId\" = '" + user + "' " +
-              "AND (\"Subject\" ILIKE '%" + q + "%' OR \"Body\" ILIKE '%" + q + "%')";
+    var pattern = "%" + q + "%";
 
-    var messages = await db.Messages.FromSqlRaw(sql).OrderByDescending(m => m.SentAt).ToListAsync();
+    // EF parameteriseert het zoekpatroon; invoer wordt niet in SQL geplakt.
+    var messages = await db.Messages.AsNoTracking()
+        .Where(m => ids.Contains(m.Id))
+        .Where(m => EF.Functions.ILike(m.Subject, pattern) || EF.Functions.ILike(m.Body, pattern))
+        .OrderByDescending(m => m.SentAt)
+        .ToListAsync(ct);
+
     return Results.Ok(messages);
 });
 
-api.MapGet("/messages/export", async (ClaimsPrincipal principal, UnbreakableContext db) =>
+api.MapGet("/messages/export", async (ClaimsPrincipal principal, MessageAuthorization authz,
+    UnbreakableContext db, CancellationToken ct) =>
 {
-    var user = principal.ToCurrentUser().Sub;
-
-    var messages = await db.Messages
-        .Where(m => m.RecipientId == user)
+    var ids = await authz.ReadableMessageIdsAsync(principal.ToCurrentUser(), ct);
+    var messages = await db.Messages.AsNoTracking()
+        .Where(m => ids.Contains(m.Id))
         .OrderBy(m => m.SentAt)
-        .ToListAsync();
+        .ToListAsync(ct);
 
     return Results.Text(JsonConvert.SerializeObject(messages, Formatting.Indented), "application/json");
 });

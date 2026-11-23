@@ -53,6 +53,32 @@ public sealed class MessageAuthorization
         return allowed;
     }
 
+    // De PDP bepaalt ook de toegankelijke objecten voor inbox, zoeken en export.
+    // Deze klasse vertaalt alleen object-id's, niet de relaties of toegangsregels.
+    public async Task<int[]> ReadableMessageIdsAsync(CurrentUser user, CancellationToken ct)
+    {
+        var objects = await _fga.ListObjectsAsync(UserId(user.Sub), PermissionRead, ObjectType, ct);
+        var prefix = ObjectType + ":";
+        var ids = new HashSet<int>();
+
+        foreach (var obj in objects)
+        {
+            if (!obj.StartsWith(prefix, StringComparison.Ordinal)
+                || !int.TryParse(obj.AsSpan(prefix.Length), NumberStyles.None,
+                    CultureInfo.InvariantCulture, out var id)
+                || id <= 0)
+            {
+                // Een onverwacht antwoord nooit vervangen door een ruimere databasequery.
+                throw new FgaUnavailableException("OpenFGA gaf een ongeldig bericht-id terug.");
+            }
+            ids.Add(id);
+        }
+
+        _logger.LogInformation("AUTHZ LIST user={User} sub={Sub} permission={Permission} count={Count}",
+            user.Username, user.Sub, PermissionRead, ids.Count);
+        return ids.ToArray();
+    }
+
     // ------------------------------------------------------------ feiten (tuples)
 
     // Zorgt dat in OpenFGA exact staat wie afzender en ontvanger is. Idempotent:
