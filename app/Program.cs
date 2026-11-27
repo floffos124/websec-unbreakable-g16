@@ -169,6 +169,15 @@ api.MapGet("/messages/{id:int}", async (int id, ClaimsPrincipal principal, Messa
 api.MapPost("/messages", async (Message message, ClaimsPrincipal principal, UserDirectory directory,
     MessageAuthorization authz, UnbreakableContext db, ILogger<Program> logger, CancellationToken ct) =>
 {
+    // Zonder geldige HMAC (HMAC-SHA256, 64 hexadecimale tekens) kan de ontvanger de
+    // integriteit niet controleren. Zo'n bericht weigeren we, ook via een directe API-call.
+    if (message.Hmac == null || !System.Text.RegularExpressions.Regex.IsMatch(message.Hmac, "^[0-9a-f]{64}$"))
+    {
+        return Results.Problem(title: "Ongeldige HMAC",
+            detail: "Een bericht moet een HMAC-SHA256 van 64 hexadecimale tekens bevatten.",
+            statusCode: StatusCodes.Status400BadRequest);
+    }
+
     // De afzender komt altijd uit het token, nooit uit de request body.
     var user = principal.ToCurrentUser();
     message.Sender = user.Username;

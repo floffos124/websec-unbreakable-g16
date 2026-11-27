@@ -144,7 +144,7 @@ async function renderMessage(id) {
             <input id="decryptkey" class="form-control mr-2" maxlength="40"
                    pattern="[A-Za-z0-9_]+" title="Enkel A-Z, 0-9 en _" />
             <label for="hmackey" class="mr-2 ml-3">HMAC sleutel:</label>
-            <input id="hmackey" class="form-control mr-2" />
+            <input id="hmackey" class="form-control mr-2" required />
             <button id="decryptbtn" class="btn btn-success">Ontcijferen</button>
         </div>
         <div id="hmac-status" class="mb-3"></div>
@@ -160,21 +160,22 @@ async function renderMessage(id) {
         const hmacKey = document.getElementById('hmackey').value;
         if (!key) return;
 
-        // Verifieer HMAC als er een HMAC sleutel en opgeslagen HMAC zijn
+        // Eerst de HMAC controleren, pas daarna ontcijferen. Zonder HMAC-sleutel,
+        // zonder opgeslagen HMAC of met een foute HMAC wordt er niet ontcijferd.
         const statusEl = document.getElementById('hmac-status');
-        if (hmacKey && m.hmac) {
-            const valid = await verifyHmac(m.body, hmacKey, m.hmac);
-            if (valid) {
-                statusEl.innerHTML = '<span class="text-success">HMAC geldig: het bericht is niet gewijzigd.</span>';
-            } else {
-                statusEl.innerHTML = '<span class="text-danger">HMAC ongeldig: het bericht is mogelijk gewijzigd!</span>';
-                return;
-            }
-        } else if (m.hmac && !hmacKey) {
-            statusEl.innerHTML = '<span class="text-warning">Dit bericht heeft een HMAC, maar je hebt geen HMAC sleutel ingegeven.</span>';
-        } else {
-            statusEl.innerHTML = '';
+        if (!m.hmac) {
+            statusEl.innerHTML = '<span class="text-danger">Dit bericht heeft geen HMAC. De integriteit kan niet gecontroleerd worden, dus het wordt niet ontcijferd.</span>';
+            return;
         }
+        if (!hmacKey) {
+            statusEl.innerHTML = '<span class="text-danger">Geef de HMAC-sleutel in. Zonder controle van de HMAC wordt het bericht niet ontcijferd.</span>';
+            return;
+        }
+        if (!(await verifyHmac(m.body, hmacKey, m.hmac))) {
+            statusEl.innerHTML = '<span class="text-danger">HMAC ongeldig: het bericht is mogelijk gewijzigd. Het wordt niet ontcijferd.</span>';
+            return;
+        }
+        statusEl.innerHTML = '<span class="text-success">HMAC geldig: het bericht is niet gewijzigd.</span>';
 
         try {
             const plaintext = decrypt(m.body, key);

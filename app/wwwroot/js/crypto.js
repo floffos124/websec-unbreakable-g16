@@ -57,10 +57,20 @@ export async function computeHmac(ciphertext, hmacKey) {
         .join('');
 }
 
-// Verifieer HMAC-SHA256: geeft true als de MAC klopt
+// Verifieer HMAC-SHA256: geeft true als de MAC klopt.
+// Zonder sleutel of zonder opgeslagen MAC is het antwoord altijd false:
+// een ontbrekende MAC mag nooit als "geldig" gelden.
+// De vergelijking loopt altijd over alle tekens (geen vroegtijdige stop).
 export async function verifyHmac(ciphertext, hmacKey, expectedMac) {
+    if (!hmacKey || typeof expectedMac !== 'string' || !/^[0-9a-f]{64}$/.test(expectedMac)) {
+        return false;
+    }
     const computed = await computeHmac(ciphertext, hmacKey);
-    return computed === expectedMac;
+    let diff = 0;
+    for (let i = 0; i < computed.length; i++) {
+        diff |= computed.charCodeAt(i) ^ expectedMac.charCodeAt(i);
+    }
+    return diff === 0;
 }
 
 // Ontcijfer: (ciphertext - sleutel) mod 37 per teken
